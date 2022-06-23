@@ -1,0 +1,129 @@
+#!/bin/bash
+
+# INTEL CONFIDENTIAL
+#
+# Copyright 2021-2021 Intel Corporation.
+#
+# This software and the related documents are Intel copyrighted materials, and your use of
+# them is governed by the express license under which they were provided to you ("License").
+# Unless the License provides otherwise, you may not use, modify, copy, publish, distribute,
+# disclose or transmit this software or the related documents without Intel's prior written permission.
+#
+# This software and the related documents are provided as is, with no express or implied warranties,
+# other than those that are expressly stated in the License.
+
+set -uo pipefail
+
+CERTS_DIRECTORY="/opt/smartedge/edgedns/certs/client"
+
+error() {
+    >&2 echo -e "[ERROR] ${*}"
+}
+
+log() {
+    echo -e "[INFO]  ${*}"
+}
+
+usage() {
+    local -r exit_code=${1}
+
+    echo "Executes grpc request to edgedns on node to add/del dns entry"
+    echo
+    echo "Usage:"
+    echo "    kubectl edgedns add <domain_ips>"
+    echo "    kubectl edgedns del <domain>"
+    echo "    kubectl edgedns set-forwarders <ip_list>"
+    echo "    kubectl edgedns set-forwarders clear"
+    echo "    kubectl edgedns get-all-records"
+    echo "    kubectl edgedns ( --help | -h)"
+    echo
+    echo "Actions:"
+    echo "    add                     Send add request to add DNS"
+    echo "    del                     Removes DNS entry"
+    echo "    set-forwarders          Set/Remove DNS forwarders"
+    echo "    get-all-records         Get all DNS entries"
+    echo "    --help | -h             Print this message"
+    echo
+    exit "${exit_code}"
+}
+
+fail_if_var_empty() {
+    local var=${1:-}
+    local var_name=${2:-}
+
+    if [[ ! "${var}" ]]; then
+        error "Expected non-empty value for ${var_name}\n"
+        usage 1
+    fi
+}
+
+get_node_service() {
+    svc=${1:-}
+    endpoints=$(kubectl get endpoints -o custom-columns=NAME:.metadata.name,NODE:.subsets[*].addresses[*].ip,IP:.subsets[*].addresses[*].nodeName -n smartedge-system --no-headers | grep "^${svc}")
+
+    if [[ ! "${endpoints}" ]] ; then
+        error "Service '${svc}' not found"
+        exit 1
+    fi
+    echo ${endpoints}
+    ifscv=($endpoints)
+
+    IFS=',' read -r -a array_addrs <<< "${ifscv[1]}"
+    IFS=',' read -r -a array_nodes <<< "${ifscv[2]}"
+
+    if [[ "${#array_addrs[@]}" -ne "${#array_nodes[@]}" ]] ; then
+        error "Number of nodes does not match number of service endpoints- edgedns daemonset error!"
+        exit 1
+    fi
+    ip=${array_addrs[0]}
+}
+
+# main
+if [ "$#" -ge 1 ]; then
+    action=${1:-}
+
+    if [[ "${action}" == "--help" || "${action}" == "-h" ]]; then
+        usage 0
+    elif [[ "${action}" == "get-all-records" ]]; then
+        if [ "$#" -ne 1 ]; then
+            error "Action ${action} requires one argument: kubectl edgedns ${action}"
+            usage 1
+        fi
+        get_node_service "edgedns"
+        if [[ ! ${ip} ]] ; then
+            error "Error when retreiving node IP address"
+            exit 1
+        fi
+
+        sudo env "PATH=$PATH" edgednscli -address="${ip}:4204" -cert=${CERTS_DIRECTORY}/cert.pem -key=${CERTS_DIRECTORY}/key.pem -ca=${CERTS_DIRECTORY}/root.pem -name=edgedns.smartedge ${action}
+
+    elif [[ "${action}" == "del" || "${action}" == "add" || "${action}" == "set-forwarders" ]]; then
+        if [ "$#" -ne 2 ]; then
+            error "Action ${action} requires two arguments: kubectl edgedns ${action} <domain/domain_ips/ip_list>"
+            usage 1
+        fi
+        args=${2:-}
+        fail_if_var_empty "${args}" "<domain/domain_ips/ip_list>"
+        get_node_service "edgedns"
+        if [[ ! ${ip} ]] ; then
+            error "Error when retreiving node IP address"
+            exit 1
+        fi
+
+        if [[ "${action}" == "del" || "${action}" == "add" ]]; then
+           sudo env "PATH=$PATH" edgednscli -address="${ip}:4204" -cert=${CERTS_DIRECTORY}/cert.pem -key=${CERTS_DIRECTORY}/key.pem -ca=${CERTS_DIRECTORY}/root.pem -name=edgedns.smartedge ${action} -A $args
+        else
+           if [[ "${args}" == "clear" ]]; then
+              sudo env "PATH=$PATH" edgednscli -address="${ip}:4204" -cert=${CERTS_DIRECTORY}/cert.pem -key=${CERTS_DIRECTORY}/key.pem -ca=${CERTS_DIRECTORY}/root.pem -name=edgedns.smartedge -${action} ""
+           else
+              sudo env "PATH=$PATH" edgednscli -address="${ip}:4204" -cert=${CERTS_DIRECTORY}/cert.pem -key=${CERTS_DIRECTORY}/key.pem -ca=${CERTS_DIRECTORY}/root.pem -name=edgedns.smartedge -${action} $args
+           fi
+        fi
+    else
+        error "Unrecognized action: ${action}\n"
+        usage 1
+    fi
+else
+    error "Wrong usage\n"
+    usage 1
+fi

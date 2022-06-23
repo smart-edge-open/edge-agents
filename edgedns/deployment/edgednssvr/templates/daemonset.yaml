@@ -1,0 +1,128 @@
+# INTEL CONFIDENTIAL
+#
+# Copyright 2021-2021 Intel Corporation.
+#
+# This software and the related documents are Intel copyrighted materials, and your use of
+# them is governed by the express license under which they were provided to you ("License").
+# Unless the License provides otherwise, you may not use, modify, copy, publish, distribute,
+# disclose or transmit this software or the related documents without Intel's prior written permission.
+#
+# This software and the related documents are provided as is, with no express or implied warranties,
+# other than those that are expressly stated in the License.
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: "{{ .Values.name }}"
+spec:
+  selector:
+    matchLabels:
+      name: "{{ .Values.service.name }}"
+  template:
+    metadata:
+      labels:
+        name: "{{ .Values.service.name }}"
+    spec:
+      serviceAccountName: "{{ .Values.rbac.serviceaccount }}"
+      containers:
+      - name: "{{ .Values.name }}"
+        image: "{{ .Values.image.edgedns.repository }}:{{ .Values.image.edgedns.tag }}"
+        imagePullPolicy: "{{ .Values.image.edgedns.pullPolicy }}"
+        securityContext:
+          readOnlyRootFilesystem: true
+          capabilities:
+            add: ["NET_ADMIN"]
+        args:
+        - -address={{ .Values.edgedns_parameters.server.addr }}:{{ .Values.edgedns_parameters.server.port }}
+        - -port={{ .Values.edgedns_parameters.listener.port }}
+        - -4={{ .Values.edgedns_parameters.listener.addr }}
+        - -log={{ .Values.edgedns_parameters.log_level }}
+        - -syslog={{ .Values.edgedns_parameters.sys_log_addr }}
+        - -hb={{ .Values.edgedns_parameters.statsd.hbInterval }}
+        - -statsdip={{ .Values.edgedns_parameters.statsd.ip }}
+        - -statsdport={{ .Values.edgedns_parameters.statsd.port }}
+        - -trustedips={{ .Values.edgedns_parameters.trustedips }}
+        resources:
+          requests:
+            cpu: "0.1"
+          limits:
+            cpu: "1"
+            memory: "128Mi"
+        volumeMounts:
+        - name: edgednssvr
+          mountPath: /var/lib/edgedns
+        - name: certs
+          mountPath: /home/edgednssvr/certs
+          readOnly: true
+        env:
+          - name: http_proxy
+            valueFrom:
+              configMapKeyRef:
+                name: "{{ .Values.env_configmap }}"
+                key: http_proxy
+          - name: https_proxy
+            valueFrom:
+              configMapKeyRef:
+                name: "{{ .Values.env_configmap }}"
+                key: https_proxy
+      initContainers:
+      - name: alpine
+        image: alpine:latest
+        command: ["/bin/sh"]
+        args: ["-c", "cp /root/ca-certrequester/cert.pem /root/certs/root.pem"]
+        imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            cpu: "0.1"
+          limits:
+            cpu: "0.1"
+            memory: "128Mi"
+        volumeMounts:
+        - name: ca-certrequester
+          mountPath: /root/ca-certrequester
+        - name: certs
+          mountPath: /root/certs
+      - name: certrequester
+        image: "{{ .Values.image.cert_requester.repository }}:{{ .Values.image.cert_requester.tag }}"
+        args: ["--cfg", "/home/certrequester/configs/edgedns_certrequest.json"]
+        imagePullPolicy: "{{ .Values.image.cert_requester.pullPolicy }}"
+        securityContext:
+          runAsUser: 1006
+          runAsGroup: 1001
+        resources:
+          requests:
+            cpu: "0.1"
+          limits:
+            cpu: "0.1"
+            memory: "128Mi"
+        volumeMounts:
+        - name: configs
+          mountPath: /home/certrequester/configs
+        - name: certs
+          mountPath: /home/certrequester/certs
+      tolerations:
+      - effect: NoSchedule
+        key: cmk
+        operator: Exists
+      volumes:
+      - name: edgednssvr
+        hostPath:
+          path: "{{ .Values.volumes.hostpath.edgednssvr }}"
+      - name: ca-certrequester
+        secret:
+          secretName: "{{ .Values.volumes.secret }}"
+      - name: configs
+        hostPath:
+          path: "{{ .Values.volumes.hostpath.configs }}"
+      - name: certs
+        hostPath:
+          path: "{{ .Values.volumes.hostpath.certs }}"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                - key: "vcac-zone"
+                  operator: NotIn
+                  values:
+                    - "yes"
