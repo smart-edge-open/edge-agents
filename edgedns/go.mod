@@ -12,7 +12,7 @@ require (
 	github.com/smart-edge-open/edge-services/common/log v0.0.0-20220623024713-1f0d859dedbc
 	github.com/stretchr/testify v1.7.0
 	go.etcd.io/bbolt v1.3.6
-	golang.org/x/sys v0.0.0-20210823070655-63515b42dcdf // indirect
+	golang.org/x/sys v0.1.0 // indirect
 	google.golang.org/grpc v1.40.0
 	google.golang.org/protobuf v1.26.0
 	gopkg.in/alexcesaro/statsd.v2 v2.0.0 // indirect
